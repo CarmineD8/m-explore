@@ -1,9 +1,10 @@
-cmake_minimum_required(VERSION 2.8.3)
+cmake_minimum_required(VERSION 3.1)
 project(multirobot_map_merge)
 
 ## Find catkin macros and libraries
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
+  image_geometry
   map_msgs
   nav_msgs
   roscpp
@@ -38,13 +39,9 @@ catkin_package(
 ## Build ##
 ###########
 # c++11 support required
-include(CheckCXXCompilerFlag)
-check_cxx_compiler_flag("-std=c++11" COMPILER_SUPPORTS_CXX11)
-if(COMPILER_SUPPORTS_CXX11)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
-else()
-  message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} has no C++11 support. Please use a different C++ compiler.")
-endif()
+set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 ## Specify additional locations of header files
 include_directories(
@@ -105,6 +102,8 @@ if(CATKIN_ENABLE_TESTING)
   target_link_libraries(test_merging_pipeline combine_grids ${catkin_LIBRARIES})
 
   # test all launch files
-  roslaunch_add_file_check(launch)
+  # do not test from_map_server.launch as we don't want to add dependency on map_server and this
+  # launchfile is not critical
+  roslaunch_add_file_check(launch/map_merge.launch)
   roslaunch_add_file_check(launch/experiments)
 endif()

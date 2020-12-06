@@ -91,6 +91,22 @@ bool MergingPipeline::estimateTransforms(FeatureType feature_type,
   good_indices = cv::detail::leaveBiggestComponent(
       image_features, pairwise_matches, static_cast<float>(confidence));
 
+  // no match found. try set first non-empty grid as reference frame. we try to
+  // avoid setting empty grid as reference frame, in case some maps never
+  // arrive. If all is empty just set null transforms.
+  if (good_indices.size() == 1) {
+    transforms_.clear();
+    transforms_.resize(images_.size());
+    for (size_t i = 0; i < images_.size(); ++i) {
+      if (!images_[i].empty()) {
+        // set identity
+        transforms_[i] = cv::Mat::eye(3, 3, CV_64F);
+        break;
+      }
+    }
+    return true;
+  }
+
   /* estimate transform */
   ROS_DEBUG("calculating transforms in global reference frame");
   // note: currently used estimator never fails
@@ -120,6 +136,16 @@ bool MergingPipeline::estimateTransforms(FeatureType feature_type,
   }
 
   return true;
+}
+
+// checks whether given matrix is an identity, i.e. exactly appropriate Mat::eye
+static inline bool isIdentity(const cv::Mat& matrix)
+{
+  if (matrix.empty()) {
+    return false;
+  }
+  cv::MatExpr diff = matrix != cv::Mat::eye(matrix.size(), matrix.type());
+  return cv::countNonZero(diff) == 0;
 }
 
 nav_msgs::OccupancyGrid::Ptr MergingPipeline::composeGrids()
@@ -154,9 +180,31 @@ nav_msgs::OccupancyGrid::Ptr MergingPipeline::composeGrids()
   nav_msgs::OccupancyGrid::Ptr result;
   internal::GridCompositor compositor;
   result = compositor.compose(imgs_warped, rois);
-  result->info.map_load_time = ros::Time::now();
-  // TODO is this correct?
-  result->info.resolution = grids_[0]->info.resolution;
+
+  // set correct resolution to output grid. use resolution of identity (works
+  // for estimated trasforms), or any resolution (works for know_init_positions)
+  // - in that case all resolutions should be the same.
+  float any_resolution = 0.0;
+  for (size_t i = 0; i < transforms_.size(); ++i) {
+    // check if this transform is the reference frame
+    if (isIdentity(transforms_[i])) {
+      result->info.resolution = grids_[i]->info.resolution;
+      break;
+    }
+    if (grids_[i]) {
+      any_resolution = grids_[i]->info.resolution;
+    }
+  }
+  if (result->info.resolution <= 0.f) {
+    result->info.resolution = any_resolution;
+  }
+
+  // set grid origin to its centre
+  result->info.origin.position.x =
+      -(result->info.width / 2.0) * double(result->info.resolution);
+  result->info.origin.position.y =
+      -(result->info.height / 2.0) * double(result->info.resolution);
+  result->info.origin.orientation.w = 1.0;
 
   return result;
 }

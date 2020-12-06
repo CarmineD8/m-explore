@@ -4,7 +4,6 @@
 #include <nav_msgs/OccupancyGrid.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <opencv2/core/utility.hpp>
-#include <opencv2/core/utility.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <random>
 
@@ -14,7 +13,7 @@ nav_msgs::OccupancyGridConstPtr loadMap(const std::string& filename);
 void saveMap(const std::string& filename,
              const nav_msgs::OccupancyGridConstPtr& map);
 std::tuple<double, double, double> randomAngleTxTy();
-tf2::Transform randomTransform();
+geometry_msgs::Transform randomTransform();
 cv::Mat randomTransformMatrix();
 
 /* map_server is really bad. until there is no replacement I will implement it
@@ -85,17 +84,28 @@ std::tuple<double, double, double> randomAngleTxTy()
                                             translation_dis(g));
 }
 
-tf2::Transform randomTransform()
+geometry_msgs::Transform randomTransform()
 {
   double angle, tx, ty;
   std::tie(angle, tx, ty) = randomAngleTxTy();
   tf2::Transform transform;
   tf2::Quaternion rotation;
   rotation.setEuler(0., 0., angle);
+  rotation.normalize();
   transform.setRotation(rotation);
   transform.setOrigin(tf2::Vector3(tx, ty, 0.));
 
-  return transform;
+  auto msg = toMsg(transform);
+  // normalize quaternion such that w > 0 (q and -q represents the same
+  // transformation)
+  if (msg.rotation.w < 0.) {
+    msg.rotation.x *= -1.;
+    msg.rotation.y *= -1.;
+    msg.rotation.z *= -1.;
+    msg.rotation.w *= -1.;
+  }
+
+  return msg;
 }
 
 cv::Mat randomTransformMatrix()
@@ -107,6 +117,42 @@ cv::Mat randomTransformMatrix()
        std::sin(angle), std::cos(angle), ty, 0., 0., 1.);
 
   return transform;
+}
+
+static inline bool isIdentity(const geometry_msgs::Transform& transform)
+{
+  tf2::Transform t;
+  tf2::fromMsg(transform, t);
+  return tf2::Transform::getIdentity() == t;
+}
+
+static inline bool isIdentity(const geometry_msgs::Quaternion& rotation)
+{
+  tf2::Quaternion q;
+  tf2::fromMsg(rotation, q);
+  return tf2::Quaternion::getIdentity() == q;
+}
+
+// data size is consistent with height and width
+static inline bool consistentData(const nav_msgs::OccupancyGrid& grid)
+{
+  return grid.info.width * grid.info.height == grid.data.size();
+}
+
+// ignores header, map_load_time and origin
+static inline bool operator==(const nav_msgs::OccupancyGrid& grid1,
+                              const nav_msgs::OccupancyGrid& grid2)
+{
+  bool equal = true;
+  equal &= grid1.info.width == grid2.info.width;
+  equal &= grid1.info.height == grid2.info.height;
+  equal &= std::abs(grid1.info.resolution - grid2.info.resolution) <
+           std::numeric_limits<float>::epsilon();
+  equal &= grid1.data.size() == grid2.data.size();
+  for (size_t i = 0; i < grid1.data.size(); ++i) {
+    equal &= grid1.data[i] == grid2.data[i];
+  }
+  return equal;
 }
 
 #endif  // TESTING_HELPERS_H_

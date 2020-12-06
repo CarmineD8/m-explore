@@ -45,14 +45,22 @@
 #include <combine_grids/merging_pipeline.h>
 
 const std::array<const char*, 2> hector_maps = {
-    "map00.pgm", "map05.pgm",
+    "map00.pgm",
+    "map05.pgm",
 };
 
 const std::array<const char*, 2> gmapping_maps = {
-    "2011-08-09-12-22-52.pgm", "2012-01-28-11-12-01.pgm",
+    "2011-08-09-12-22-52.pgm",
+    "2012-01-28-11-12-01.pgm",
 };
 
 constexpr bool verbose_tests = false;
+
+#define EXPECT_VALID_GRID(grid)                                                \
+  ASSERT_TRUE(static_cast<bool>(grid));                                        \
+  EXPECT_TRUE(consistentData(*grid));                                          \
+  EXPECT_GT(grid->info.resolution, 0);                                         \
+  EXPECT_TRUE(isIdentity(grid->info.origin.orientation))
 
 TEST(MergingPipeline, canStich0Grid)
 {
@@ -72,24 +80,13 @@ TEST(MergingPipeline, canStich1Grid)
   merger.estimateTransforms();
   auto merged_grid = merger.composeGrids();
 
-  // sanity of merged grid
-  ASSERT_TRUE(static_cast<bool>(merged_grid));
-  EXPECT_FALSE(merged_grid->data.empty());
-  EXPECT_EQ((merged_grid->info.width) * (merged_grid->info.height),
-            merged_grid->data.size());
-  // merged must be the same with original
-  EXPECT_EQ(merged_grid->info.width, map->info.width);
-  EXPECT_EQ(merged_grid->info.height, map->info.height);
-  EXPECT_EQ(merged_grid->data.size(), map->data.size());
-  for (size_t i = 0; i < merged_grid->data.size(); ++i) {
-    EXPECT_EQ(merged_grid->data[i], map->data[i]);
-  }
+  EXPECT_VALID_GRID(merged_grid);
+  // don't use EXPECT_EQ, since it prints too much info
+  EXPECT_TRUE(*merged_grid == *map);
   // check estimated transforms
   auto transforms = merger.getTransforms();
   EXPECT_EQ(transforms.size(), 1);
-  tf2::Transform t;
-  tf2::fromMsg(transforms[0], t);
-  EXPECT_EQ(tf2::Transform::getIdentity(), t);
+  EXPECT_TRUE(isIdentity(transforms[0]));
 }
 
 TEST(MergingPipeline, canStich2Grids)
@@ -100,11 +97,7 @@ TEST(MergingPipeline, canStich2Grids)
   merger.estimateTransforms();
   auto merged_grid = merger.composeGrids();
 
-  // sanity of merged grid
-  ASSERT_TRUE(static_cast<bool>(merged_grid));
-  EXPECT_FALSE(merged_grid->data.empty());
-  EXPECT_EQ((merged_grid->info.width) * (merged_grid->info.height),
-            merged_grid->data.size());
+  EXPECT_VALID_GRID(merged_grid);
   // grid size should indicate sucessful merge
   EXPECT_NEAR(2091, merged_grid->info.width, 30);
   EXPECT_NEAR(2091, merged_grid->info.height, 30);
@@ -122,11 +115,7 @@ TEST(MergingPipeline, canStichGridsGmapping)
   merger.estimateTransforms();
   auto merged_grid = merger.composeGrids();
 
-  // sanity of merged grid
-  ASSERT_TRUE(static_cast<bool>(merged_grid));
-  EXPECT_FALSE(merged_grid->data.empty());
-  EXPECT_EQ((merged_grid->info.width) * (merged_grid->info.height),
-            merged_grid->data.size());
+  EXPECT_VALID_GRID(merged_grid);
   // grid size should indicate sucessful merge
   EXPECT_NEAR(5427, merged_grid->info.width, 30);
   EXPECT_NEAR(5427, merged_grid->info.height, 30);
@@ -164,17 +153,12 @@ TEST(MergingPipeline, estimationAccuracy)
   merger.estimateTransforms();
   auto merged_grid = merger.composeGrids();
 
-  // sanity of merged grid
-  ASSERT_TRUE(static_cast<bool>(merged_grid));
-  EXPECT_FALSE(merged_grid->data.empty());
-  EXPECT_EQ((merged_grid->info.width) * (merged_grid->info.height),
-            merged_grid->data.size());
+  EXPECT_VALID_GRID(merged_grid);
   // transforms
   auto transforms = merger.getTransforms();
   EXPECT_EQ(transforms.size(), 2);
+  EXPECT_TRUE(isIdentity(transforms[0]));
   tf2::Transform t;
-  tf2::fromMsg(transforms[0], t);
-  EXPECT_EQ(tf2::Transform::getIdentity(), t);
   tf2::fromMsg(transforms[1], t);
 
   EXPECT_NEAR(angle, t.getRotation().getAngle(), 1e-2);
@@ -188,16 +172,7 @@ TEST(MergingPipeline, transformsRoundTrip)
   combine_grids::MergingPipeline merger;
   merger.feed(&map, &map + 1);
   for (size_t i = 0; i < 1000; ++i) {
-    auto t = randomTransform();
-    auto in_transform = toMsg(t);
-    // normalize input quaternion such that w > 0 (q and -q represents the same
-    // transformation)
-    if (in_transform.rotation.w < 0.) {
-      in_transform.rotation.x *= -1.;
-      in_transform.rotation.y *= -1.;
-      in_transform.rotation.z *= -1.;
-      in_transform.rotation.w *= -1.;
-    }
+    auto in_transform = randomTransform();
     merger.setTransforms(&in_transform, &in_transform + 1);
 
     auto out_transforms = merger.getTransforms();
@@ -221,8 +196,7 @@ TEST(MergingPipeline, setTransformsInternal)
 
   for (size_t i = 0; i < 1000; ++i) {
     auto transform = randomTransform();
-    geometry_msgs::Transform t = toMsg(transform);
-    merger.setTransforms(&t, &t + 1);
+    merger.setTransforms(&transform, &transform + 1);
 
     ASSERT_EQ(merger.transforms_.size(), 1);
     auto& transform_internal = merger.transforms_[0];
@@ -230,7 +204,9 @@ TEST(MergingPipeline, setTransformsInternal)
     tf2::Vector3 a[2] = {{1., 0., 1.}, {0., 1., 1.}};
     cv::Point3d b[2] = {{1., 0., 1.}, {0., 1., 1.}};
     for (auto j : {0, 1}) {
-      auto p1 = transform * a[j];
+      tf2::Transform t;
+      fromMsg(transform, t);
+      auto p1 = t * a[j];
       cv::Mat p2 = transform_internal * cv::Mat(b[j]);
       // some precision is naturally lost during conversion, float precision is
       // still good for us
@@ -295,6 +271,42 @@ TEST(MergingPipeline, emptyImageWithTransform)
   merger.setTransforms(transforms.begin(), transforms.end());
   EXPECT_EQ(merger.composeGrids(), nullptr);
   EXPECT_EQ(merger.getTransforms().size(), size);
+}
+
+/* one image may be empty */
+TEST(MergingPipeline, oneEmptyImage)
+{
+  std::vector<nav_msgs::OccupancyGridConstPtr> maps{nullptr,
+                                                    loadMap(gmapping_maps[0])};
+  combine_grids::MergingPipeline merger;
+  merger.feed(maps.begin(), maps.end());
+  merger.estimateTransforms();
+  auto merged_grid = merger.composeGrids();
+  auto transforms = merger.getTransforms();
+
+  EXPECT_VALID_GRID(merged_grid);
+  // don't use EXPECT_EQ, since it prints too much info
+  EXPECT_TRUE(*merged_grid == *maps[1]);
+  // transforms
+  EXPECT_EQ(transforms.size(), 2);
+  EXPECT_TRUE(isIdentity(transforms[1]));
+}
+
+// non-identity known positions etc.
+TEST(MergingPipeline, knownInitPositions)
+{
+  auto maps = loadMaps(gmapping_maps.begin(), gmapping_maps.end());
+  combine_grids::MergingPipeline merger;
+  merger.feed(maps.begin(), maps.end());
+
+  for (size_t i = 0; i < 5; ++i) {
+    std::vector<geometry_msgs::Transform> transforms{randomTransform(),
+                                                     randomTransform()};
+    merger.setTransforms(transforms.begin(), transforms.end());
+    auto merged_grid = merger.composeGrids();
+
+    EXPECT_VALID_GRID(merged_grid);
+  }
 }
 
 int main(int argc, char** argv)
